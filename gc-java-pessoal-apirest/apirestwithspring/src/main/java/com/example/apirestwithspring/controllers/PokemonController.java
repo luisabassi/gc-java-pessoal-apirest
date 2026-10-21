@@ -1,10 +1,11 @@
 package com.example.apirestwithspring.controllers;
 
+import com.example.apirestwithspring.entities.Pokemon;
 import com.example.apirestwithspring.services.PokemonService;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/pokeApi")
@@ -21,10 +22,30 @@ public class PokemonController {
         return service.getPokemonByName(pokemon_name);
     }
 
-    @GetMapping()
-    public String listPokemons(){
-        return service.getFirst50Pokemons();
+    @GetMapping("/pokemons")
+    public List<Pokemon> listAll() {
+        return service.listAll();
     }
 
+    @GetMapping("/pokemons/{id}")
+    public Pokemon findById(@PathVariable Integer id) {
+        return service.findById(id);
+    }
 
+    @PostMapping("/pokemons")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Pokemon create(@RequestBody Pokemon pokemon) {
+        return service.create(pokemon);
+    }
+
+    @PutMapping("/pokemons/{id}")
+    public Pokemon update(@PathVariable Integer id, @RequestBody Pokemon pokemon) {
+        return service.update(id, pokemon);
+    }
+
+    @DeleteMapping("/pokemons/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable Integer id) {
+        service.delete(id);
+    }
 }
