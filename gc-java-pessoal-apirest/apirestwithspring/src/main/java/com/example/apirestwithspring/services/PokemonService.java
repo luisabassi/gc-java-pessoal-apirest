@@ -1,104 +1,114 @@
 package com.example.apirestwithspring.services;
 
+import com.example.apirestwithspring.dto.PokeApiPokemon;
+import com.example.apirestwithspring.dto.PokemonRequest;
+import com.example.apirestwithspring.dto.PokemonResponse;
 import com.example.apirestwithspring.entities.Pokemon;
+import com.example.apirestwithspring.entities.Tipo;
+import com.example.apirestwithspring.entities.Treinador;
+import com.example.apirestwithspring.repositories.PokemonRepository;
+import com.example.apirestwithspring.repositories.TipoRepository;
+import com.example.apirestwithspring.repositories.TreinadorRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
+import java.util.Set;
 
 @Service
 public class PokemonService {
 
-    private static final int TOTAL_INICIAL = 50;
+    private final PokemonRepository pokemonRepository;
+    private final TreinadorRepository treinadorRepository;
+    private final TipoRepository tipoRepository;
+    private final PokeApiClient pokeApi;
 
-    private final RestClient client;
-
-    private final List<Pokemon> pokemons = new ArrayList<>();
-    private boolean carregado = false;
-
-    public PokemonService(RestClient.Builder builder) {
-        this.client = RestClient.builder().baseUrl("https://pokeapi.co/api/v2").build();
+    public PokemonService(PokemonRepository pokemonRepository,
+                          TreinadorRepository treinadorRepository,
+                          TipoRepository tipoRepository,
+                          PokeApiClient pokeApi) {
+        this.pokemonRepository = pokemonRepository;
+        this.treinadorRepository = treinadorRepository;
+        this.tipoRepository = tipoRepository;
+        this.pokeApi = pokeApi;
     }
 
-
-    public String getPokemonByName (String pokemon_name){
-       return  Objects.requireNonNull(client.get()
-                       .uri("/pokemon/{pokemon_name}", pokemon_name)
-                       .retrieve()
-                       .body(Pokemon.class))
-                       .toString();
+    // Consulta direta na PokeAPI 
+    public PokeApiPokemon getPokemonByName(String pokemonName) {
+        return pokeApi.buscar(pokemonName);
     }
 
-    public synchronized List<Pokemon> listAll() {
-        carregarSeNecessario();
-        return new ArrayList<>(pokemons);
+    @Transactional(readOnly = true)
+    public List<PokemonResponse> listAll(String tipo) {
+        List<Pokemon> lista = (tipo == null || tipo.isBlank())
+                ? pokemonRepository.findAll()
+                : pokemonRepository.buscarPorTipo(tipo.trim());
+        return lista.stream().map(PokemonResponse::from).toList();
     }
 
-    public synchronized Pokemon findById(Integer id) {
-        carregarSeNecessario();
-        return pokemons.stream()
-                .filter(p -> p.id().equals(id))
-                .findFirst()
-                .orElseThrow(() -> naoEncontrado(id));
+    @Transactional(readOnly = true)
+    public PokemonResponse findById(Long id) {
+        return PokemonResponse.from(buscar(id));
     }
 
-    public synchronized Pokemon create(Pokemon novo) {
-        carregarSeNecessario();
-        if (novo.name() == null || novo.name().isBlank()) {
+    @Transactional
+    public PokemonResponse create(PokemonRequest req) {
+        validar(req);
+        Pokemon pokemon = new Pokemon();
+        aplicar(pokemon, req);
+        return PokemonResponse.from(pokemonRepository.save(pokemon));
+    }
+
+    @Transactional
+    public PokemonResponse update(Long id, PokemonRequest req) {
+        validar(req);
+        Pokemon pokemon = buscar(id);
+        aplicar(pokemon, req);
+        return PokemonResponse.from(pokemonRepository.save(pokemon));
+    }
+
+    @Transactional
+    public void delete(Long id) {
+        pokemonRepository.delete(buscar(id));
+    }
+
+    // ---------- auxiliares ----------
+
+    private Pokemon buscar(Long id) {
+        return pokemonRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Pokémon com id " + id + " não encontrado"));
+    }
+
+    private void validar(PokemonRequest req) {
+        if (req.name() == null || req.name().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "O campo 'name' é obrigatório");
         }
-        Integer id = novo.id();
-        if (id == null) {
-            id = pokemons.stream().mapToInt(Pokemon::id).max().orElse(0) + 1;
-        } else if (pokemons.stream().anyMatch(p -> p.id().equals(novo.id()))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Já existe um pokémon com id " + id);
-        }
-        Pokemon criado = new Pokemon(id, novo.name(), novo.height());
-        pokemons.add(criado);
-        return criado;
     }
 
-    public synchronized Pokemon update(Integer id, Pokemon dados) {
-        carregarSeNecessario();
-        if (dados.name() == null || dados.name().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "O campo 'name' é obrigatório");
+    private void aplicar(Pokemon pokemon, PokemonRequest req) {
+        pokemon.setName(req.name());
+        pokemon.setHeight(req.height());
+
+        if (req.treinadorId() == null) {
+            pokemon.setTreinador(null);
+        } else {
+            Treinador treinador = treinadorRepository.findById(req.treinadorId())
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST, "Treinador " + req.treinadorId() + " não existe"));
+            pokemon.setTreinador(treinador);
         }
-        for (int i = 0; i < pokemons.size(); i++) {
-            if (pokemons.get(i).id().equals(id)) {
-                // Pokemon é um record (imutável): substitui o item, mantendo o id da URL
-                Pokemon atualizado = new Pokemon(id, dados.name(), dados.height());
-                pokemons.set(i, atualizado);
-                return atualizado;
+
+        Set<Tipo> tipos = new HashSet<>();
+        if (req.tipoIds() != null && !req.tipoIds().isEmpty()) {
+            tipos.addAll(tipoRepository.findAllById(req.tipoIds()));
+            if (tipos.size() != req.tipoIds().size()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Algum tipo informado não existe");
             }
         }
-        throw naoEncontrado(id);
-    }
-
-
-    public synchronized void delete(Integer id) {
-        carregarSeNecessario();
-        if (!pokemons.removeIf(p -> p.id().equals(id))) {
-            throw naoEncontrado(id);
-        }
-    }
-
-    private void carregarSeNecessario() {
-        if (carregado) return;
-        for (int id = 1; id <= TOTAL_INICIAL; id++) {
-            Pokemon p = client.get()
-                    .uri("/pokemon/{id}", id)
-                    .retrieve()
-                    .body(Pokemon.class);
-            if (p != null) pokemons.add(p);
-        }
-        carregado = true;
-    }
-
-    private ResponseStatusException naoEncontrado(Integer id) {
-        return new ResponseStatusException(HttpStatus.NOT_FOUND, "Pokémon com id " + id + " não encontrado");
+        pokemon.setTipos(tipos);
     }
 }
